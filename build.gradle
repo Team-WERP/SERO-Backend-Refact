@@ -39,8 +39,8 @@ dependencies {
     annotationProcessor 'org.projectlombok:lombok'
 
     /* Database */
-//    runtimeOnly 'com.mysql:mysql-connector-j'
-    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
+    runtimeOnly 'com.mysql:mysql-connector-j'
+//    runtimeOnly 'org.mariadb.jdbc:mariadb-java-client'
 
     /* Swagger OpenAPI */
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.8.14'
@@ -72,6 +72,9 @@ dependencies {
 
     /* OpenHTMLtoPDF */
     implementation 'com.openhtmltopdf:openhtmltopdf-pdfbox:1.0.10'
+
+    /* P6Spry*/
+    implementation 'com.github.gavlyukovskiy:p6spy-spring-boot-starter:1.9.0'
 }
 
 tasks.named('test') {
