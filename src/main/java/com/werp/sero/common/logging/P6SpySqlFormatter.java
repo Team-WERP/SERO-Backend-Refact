@@ -8,9 +8,14 @@ public class P6SpySqlFormatter implements MessageFormattingStrategy {
 
     @Override
     public String formatMessage(int connectionId, String now, long elapsed, String category, String prepared, String sql, String url) {
+        // statement 카테고리만 쿼리 카운트에 포함
+        if ("statement".equals(category) && StringUtils.hasText(sql)) {
+            QueryCounter.increment();
+            QueryCounter.addTime(elapsed);
+        }
+
         sql = formatSql(category, sql);
-        // 실행 시간, 카테고리, 포맷팅된 SQL 반환
-        return String.format("[%s] | %d ms | %s", category, elapsed, formatSql(category, sql));
+        return String.format("[%s] | %d ms | %s", category, elapsed, sql);
     }
 
     private String formatSql(String category, String sql) {

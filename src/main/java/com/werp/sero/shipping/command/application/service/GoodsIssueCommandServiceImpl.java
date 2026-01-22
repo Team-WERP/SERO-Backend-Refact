@@ -46,6 +46,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -122,19 +125,39 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
         List<GoodsIssueItem> goodsIssueItems = new ArrayList<>();
         List<WarehouseStock> stocksToUpdate = new ArrayList<>();
 
+        // 9-1. 품목 코드 목록 추출 후 자재 일괄 조회 (N+1 최적화)
+        List<String> itemCodes = deliveryOrderItems.stream()
+                .map(doItem -> doItem.getSalesOrderItem().getItemCode())
+                .collect(Collectors.toList());
+
+        List<Material> materials = materialRepository.findByMaterialCodeIn(itemCodes);
+        Map<String, Material> materialMap = materials.stream()
+                .collect(Collectors.toMap(Material::getMaterialCode, Function.identity()));
+
+        // 9-2. 자재 ID 목록으로 재고 일괄 조회 (N+1 최적화)
+        List<Integer> materialIds = materials.stream()
+                .map(Material::getId)
+                .collect(Collectors.toList());
+
+        List<WarehouseStock> stocks = warehouseStockRepository
+                .findByWarehouseIdAndMaterialIdIn(warehouse.getId(), materialIds);
+        Map<Integer, WarehouseStock> stockMap = stocks.stream()
+                .collect(Collectors.toMap(stock -> stock.getMaterial().getId(), Function.identity()));
+
+        // 9-3. 품목별 재고 검증 및 할당
         for (DeliveryOrderItem doItem : deliveryOrderItems) {
             String itemCode = doItem.getSalesOrderItem().getItemCode();
             String itemName = doItem.getSalesOrderItem().getItemName();
             int requiredQuantity = doItem.getDoQuantity();
 
-            // 자재 조회
-            Material material = materialRepository.findByMaterialCode(itemCode)
-                    .orElseThrow(() -> new BusinessException(ErrorCode.MATERIAL_NOT_FOUND));
+            // 자재 조회 (Map에서 O(1))
+            Material material = materialMap.get(itemCode);
+            if (material == null) {
+                throw new BusinessException(ErrorCode.MATERIAL_NOT_FOUND);
+            }
 
-            // 창고 재고 조회
-            WarehouseStock stock = warehouseStockRepository
-                    .findByWarehouseIdAndMaterialId(warehouse.getId(), material.getId())
-                    .orElse(null);
+            // 창고 재고 조회 (Map에서 O(1))
+            WarehouseStock stock = stockMap.get(material.getId());
 
             // 재고 검증
             if (stock == null || stock.getAvailableStock() < requiredQuantity) {
