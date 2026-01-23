@@ -87,8 +87,8 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
         Warehouse warehouse = warehouseRepository.findById(requestDTO.getWarehouseId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.WAREHOUSE_NOT_FOUND));
 
-        // 4. 납품서 품목 조회
-        List<DeliveryOrderItem> deliveryOrderItems = deliveryOrderItemRepository.findByDeliveryOrderId(deliveryOrder.getId());
+        // 4. 납품서 품목 조회 (Fetch Join으로 SalesOrderItem, SalesOrder 함께 로딩)
+        List<DeliveryOrderItem> deliveryOrderItems = deliveryOrderItemRepository.findByDeliveryOrderIdWithSalesOrderItem(deliveryOrder.getId());
 
         // 5. 주문 조회 (첫 번째 품목의 SalesOrderItem에서 SalesOrder 가져오기)
         if (deliveryOrderItems.isEmpty()) {
