@@ -39,3 +39,5 @@ out/
 ### ETC ###
 src/main/resources/application.yml
 src/main/resources/application-*.yml
+HANDOFF.md
+CLAUDE.md
