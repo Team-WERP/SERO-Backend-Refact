@@ -302,5 +302,25 @@
         WHERE A.id = #{ppId}
     </select>
 
+    <!-- ===================================================== -->
+    <!-- 가동 가능한 생산라인 (중복 없이) - getDailyLineSummary 전용 -->
+    <!-- ===================================================== -->
+    <select id="selectDistinctProductionLines"
+            parameterType="map"
+            resultType="com.werp.sero.production.query.dto.ProductionLineResponseDTO">
+
+        SELECT
+               A.id             AS lineId
+             , A.line_name      AS lineName
+             , A.status         AS status
+             , A.daily_capacity AS dailyCapacity
+          FROM production_line A
+         WHERE A.status = 'PL_ACTIVE'
+        <if test="factoryId != null">
+           AND A.factory_id = #{factoryId}
+        </if>
+         ORDER BY A.id
+
+    </select>
 
 </mapper>

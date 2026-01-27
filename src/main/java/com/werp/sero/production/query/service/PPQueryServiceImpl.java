@@ -2,8 +2,6 @@ package com.werp.sero.production.query.service;
 
 import com.werp.sero.common.util.DateTimeUtils;
 import com.werp.sero.production.command.application.dto.PPMonthlyPlanResponseDTO;
-import com.werp.sero.production.command.domain.aggregate.ProductionLine;
-import com.werp.sero.production.command.domain.repository.ProductionLineRepository;
 import com.werp.sero.production.exception.ProductionRequestItemNotFoundException;
 import com.werp.sero.production.query.dao.PPQueryMapper;
 import com.werp.sero.production.query.dao.PPValidateMapper;
@@ -15,7 +13,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.YearMonth;
+import java.time.temporal.ChronoUnit;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -83,6 +83,7 @@ public class PPQueryServiceImpl implements PPQueryService{
     }
 
     @Override
+    @Transactional(readOnly = true)
     public List<DailyLineSummaryResponseDTO> getDailyLineSummary(String month, Integer factoryId) {
         long startTime = System.currentTimeMillis();
         int queryCount = 0;
@@ -91,22 +92,37 @@ public class PPQueryServiceImpl implements PPQueryService{
         LocalDate start = ym.atDay(1);
         LocalDate end = ym.atEndOfMonth();
 
-        // 가동 가능한 라인 조회 (dailyCapacity 포함)
-        List<ProductionLineResponseDTO> lines = ppQueryMapper.selectProductionLines(factoryId);
+        // 1. 가동 가능한 라인 조회 (중복 없이)
+        List<ProductionLineResponseDTO> lines = ppQueryMapper.selectDistinctProductionLines(factoryId);
         queryCount++;
-        List<DailyLineSummaryResponseDTO> result = new ArrayList<>();
 
-        // 라인별, 날짜별 계획 수량 집계
+        if (lines.isEmpty()) {
+            return new ArrayList<>();
+        }
+
+        // 2. 라인 ID 수집
+        List<Integer> lineIds = lines.stream()
+                .map(ProductionLineResponseDTO::getLineId)
+                .collect(Collectors.toList());
+
+        // 3. 원시 생산계획 조회 → Java에서 일별 수량 계산
+        List<ProductionPlanRawDTO> rawPlans = ppValidateMapper.selectPlannedPlansByRange(
+                lineIds, start.toString(), end.toString()
+        );
+        queryCount++;
+
+        // 4. Map 변환: lineId → (date → plannedQty)
+        Map<Integer, Map<String, Integer>> qtyMap = buildDailyQtyMap(rawPlans, start, end);
+
+        // 5. 결과 조립 (메모리 조회)
+        List<DailyLineSummaryResponseDTO> result = new ArrayList<>();
         for (ProductionLineResponseDTO line : lines) {
+            Map<String, Integer> lineQtyMap = qtyMap.getOrDefault(line.getLineId(), Collections.emptyMap());
             Map<Integer, Integer> dailyMap = new HashMap<>();
 
             LocalDate date = start;
             while (!date.isAfter(end)) {
-                int plannedQty = ppValidateMapper.sumDailyPlannedQty(
-                        line.getLineId(),
-                        date.toString() // yyyy-MM-dd
-                );
-                queryCount++;
+                int plannedQty = lineQtyMap.getOrDefault(date.toString(), 0);
                 dailyMap.put(date.getDayOfMonth(), plannedQty);
                 date = date.plusDays(1);
             }
@@ -131,5 +147,29 @@ public class PPQueryServiceImpl implements PPQueryService{
     @Override
     public PPDetailResponseDTO getProductionPlanDetail(int ppId) {
         return ppQueryMapper.selectProductionPlanDetail(ppId);
+    }
+
+    private Map<Integer, Map<String, Integer>> buildDailyQtyMap(
+            List<ProductionPlanRawDTO> rawPlans,
+            LocalDate rangeStart,
+            LocalDate rangeEnd
+    ) {
+        Map<Integer, Map<String, Integer>> qtyMap = new HashMap<>();
+
+        for (ProductionPlanRawDTO plan : rawPlans) {
+            LocalDate planStart = LocalDate.parse(plan.getStartDate());
+            LocalDate planEnd = LocalDate.parse(plan.getEndDate());
+            int totalDays = (int) ChronoUnit.DAYS.between(planStart, planEnd) + 1;
+            int dailyQty = (int) Math.ceil((double) plan.getProductionQuantity() / totalDays);
+
+            LocalDate effectiveStart = planStart.isBefore(rangeStart) ? rangeStart : planStart;
+            LocalDate effectiveEnd = planEnd.isAfter(rangeEnd) ? rangeEnd : planEnd;
+
+            Map<String, Integer> lineMap = qtyMap.computeIfAbsent(plan.getLineId(), k -> new HashMap<>());
+            for (LocalDate d = effectiveStart; !d.isAfter(effectiveEnd); d = d.plusDays(1)) {
+                lineMap.merge(d.toString(), dailyQty, Integer::sum);
+            }
+        }
+        return qtyMap;
     }
 }

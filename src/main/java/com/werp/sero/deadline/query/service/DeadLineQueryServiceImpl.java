@@ -5,6 +5,7 @@ import com.werp.sero.deadline.query.dto.DeadLineQueryRequestDTO;
 import com.werp.sero.deadline.query.dto.DeadLineQueryResponseDTO;
 import com.werp.sero.deadline.query.dto.LineMaterialInfo;
 import com.werp.sero.production.query.dao.PPValidateMapper;
+import com.werp.sero.production.query.dto.ProductionPlanRawDTO;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -13,8 +14,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
-import java.util.ArrayList;
-import java.util.List;
+import java.time.temporal.ChronoUnit;
+import java.util.*;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -94,7 +96,41 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
         }
 
         /* =========================
-         * 3. 품목별 시뮬레이션
+         * 3. 벌크 조회 (품목 루프 진입 전)
+         * ========================= */
+        // 3-1. 모든 자재 코드 수집
+        List<String> allMaterialCodes = request.getItems().stream()
+                .map(DeadLineQueryRequestDTO.ItemRequest::getMaterialCode)
+                .distinct()
+                .collect(Collectors.toList());
+
+        // 3-2. 자재 코드 → 라인 정보 벌크 조회
+        List<LineMaterialInfo> lineMaterials =
+                deadLineMapper.findLineMaterialsByMaterialCodes(allMaterialCodes);
+        queryCount++;
+        Map<String, LineMaterialInfo> infoMap = lineMaterials.stream()
+                .collect(Collectors.toMap(LineMaterialInfo::getMaterialCode, info -> info));
+
+        // 3-3. 라인 ID 수집 + 날짜 범위 계산
+        List<Integer> lineIds = lineMaterials.stream()
+                .map(LineMaterialInfo::getProductionLineId)
+                .distinct()
+                .collect(Collectors.toList());
+
+        LocalDate etaLimit = productionDeadlineDate.plusDays(ETA_SEARCH_LIMIT_DAYS);
+
+        // 3-4. 원시 생산계획 조회 → Java에서 일별 수량 계산
+        Map<Integer, Map<String, Integer>> qtyMap = new HashMap<>();
+        if (!lineIds.isEmpty()) {
+            List<ProductionPlanRawDTO> rawPlans = ppValidateMapper.selectPlannedPlansByRange(
+                    lineIds, startDate.toString(), etaLimit.toString()
+            );
+            queryCount++;
+            qtyMap = buildDailyQtyMap(rawPlans, startDate, etaLimit);
+        }
+
+        /* =========================
+         * 4. 품목별 시뮬레이션 (메모리 조회)
          * ========================= */
         for (DeadLineQueryRequestDTO.ItemRequest item : request.getItems()) {
 
@@ -112,10 +148,7 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
                 continue;
             }
 
-            LineMaterialInfo info = deadLineMapper
-                    .findLineMaterialByMaterialCode(materialCode)
-                    .orElse(null);
-            queryCount++;
+            LineMaterialInfo info = infoMap.get(materialCode);
 
             if (info == null) {
                 responses.add(new DeadLineQueryResponseDTO(
@@ -142,28 +175,21 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
                 continue;
             }
 
+            Map<String, Integer> lineQtyMap = qtyMap.getOrDefault(lineId, Collections.emptyMap());
             int remainingQty = orderQty;
             LocalDate finishDate = null;
 
             /* =========================
-             * 3-1. 희망 납기 충족 여부 판단
+             * 4-1. 희망 납기 충족 여부 판단
              * ========================= */
             for (LocalDate d = startDate;
                  !d.isAfter(productionDeadlineDate);
                  d = d.plusDays(1)) {
 
-                int plannedQty =
-                        ppValidateMapper.sumDailyPlannedQty(lineId, d.toString());
-                queryCount++;
-
+                int plannedQty = lineQtyMap.getOrDefault(d.toString(), 0);
                 int available = Math.max(0, dailyCapacity - plannedQty);
                 int used = Math.min(available, remainingQty);
                 remainingQty -= used;
-
-//                log.info(
-//                        "[DEADLINE] material={}, line={}, date={}, daily={}, planned={}, available={}, remaining={}",
-//                        materialCode, lineId, d, dailyCapacity, plannedQty, available, remainingQty
-//                );
 
                 if (remainingQty <= 0) {
                     finishDate = d;
@@ -172,19 +198,14 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
             }
 
             /* =========================
-             * 3-2. ETA 탐색 (희망 납기 실패 시)
+             * 4-2. ETA 탐색 (희망 납기 실패 시)
              * ========================= */
             if (finishDate == null) {
-                LocalDate etaLimit = productionDeadlineDate.plusDays(ETA_SEARCH_LIMIT_DAYS);
-
                 for (LocalDate d = productionDeadlineDate.plusDays(1);
                      !d.isAfter(etaLimit);
                      d = d.plusDays(1)) {
 
-                    int plannedQty =
-                            ppValidateMapper.sumDailyPlannedQty(lineId, d.toString());
-                    queryCount++;
-
+                    int plannedQty = lineQtyMap.getOrDefault(d.toString(), 0);
                     int available = Math.max(0, dailyCapacity - plannedQty);
                     int used = Math.min(available, remainingQty);
                     remainingQty -= used;
@@ -197,7 +218,7 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
             }
 
             /* =========================
-             * 4. 결과 정리
+             * 5. 결과 정리
              * ========================= */
             boolean deliverable =
                     finishDate != null && !finishDate.isAfter(productionDeadlineDate);
@@ -236,6 +257,31 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
         return responses;
     }
 
+
+    /**
+     * 원시 생산계획 목록 → lineId별, 날짜별 계획수량 Map 변환
+     * 기존 sumDailyPlannedQty와 동일한 계산 로직:
+     * CEILING(production_quantity / (DATEDIFF(end_date, start_date) + 1))
+     */
+    private Map<Integer, Map<String, Integer>> buildDailyQtyMap(
+            List<ProductionPlanRawDTO> rawPlans, LocalDate rangeStart, LocalDate rangeEnd) {
+        Map<Integer, Map<String, Integer>> qtyMap = new HashMap<>();
+        for (ProductionPlanRawDTO plan : rawPlans) {
+            LocalDate planStart = LocalDate.parse(plan.getStartDate());
+            LocalDate planEnd = LocalDate.parse(plan.getEndDate());
+            int totalDays = (int) ChronoUnit.DAYS.between(planStart, planEnd) + 1;
+            int dailyQty = (int) Math.ceil((double) plan.getProductionQuantity() / totalDays);
+
+            LocalDate effectiveStart = planStart.isBefore(rangeStart) ? rangeStart : planStart;
+            LocalDate effectiveEnd = planEnd.isAfter(rangeEnd) ? rangeEnd : planEnd;
+
+            Map<String, Integer> lineMap = qtyMap.computeIfAbsent(plan.getLineId(), k -> new HashMap<>());
+            for (LocalDate d = effectiveStart; !d.isAfter(effectiveEnd); d = d.plusDays(1)) {
+                lineMap.merge(d.toString(), dailyQty, Integer::sum);
+            }
+        }
+        return qtyMap;
+    }
 
     /**
      * "yyyy-MM-dd HH:mm:ss" 같이 초가 포함된 값이 들어와도

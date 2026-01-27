@@ -13,4 +13,5 @@ public class LineMaterialInfo {
     private String productionLineName;
     private String productionLineStatus;
     private int dailyCapacity;
+    private String materialCode;
 }

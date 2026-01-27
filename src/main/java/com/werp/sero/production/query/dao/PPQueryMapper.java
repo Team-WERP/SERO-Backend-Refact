@@ -32,4 +32,9 @@ public interface PPQueryMapper {
     List<PPDailyPreviewResponseDTO> selectDailyPreview(String date);
 
     PPDetailResponseDTO selectProductionPlanDetail(int ppId);
+
+    // getDailyLineSummary 전용: material JOIN 없이 라인만 조회 (중복 제거)
+    List<ProductionLineResponseDTO> selectDistinctProductionLines(
+            @Param("factoryId") Integer factoryId
+    );
 }

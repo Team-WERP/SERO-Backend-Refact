@@ -79,5 +79,26 @@
 
     </select>
 
+    <!-- ===================================================== -->
+    <!-- 기간 내 해당 라인들의 원시 생산계획 조회 (Java 연산용)   -->
+    <!-- ===================================================== -->
+    <select id="selectPlannedPlansByRange"
+            resultType="com.werp.sero.production.query.dto.ProductionPlanRawDTO">
+
+        SELECT
+               A.production_line_id   AS lineId
+             , A.start_date           AS startDate
+             , A.end_date             AS endDate
+             , A.production_quantity  AS productionQuantity
+          FROM production_plan A
+         WHERE A.production_line_id IN
+              <foreach item="lineId" collection="lineIds" open="(" separator="," close=")">
+                  #{lineId}
+              </foreach>
+           AND A.status = 'PP_CONFIRMED'
+           AND A.start_date &lt;= #{endDate}
+           AND A.end_date   &gt;= #{startDate}
+
+    </select>
 
 </mapper>
