@@ -31,6 +31,8 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
     @Override
     @Transactional(readOnly = true)
     public List<DeadLineQueryResponseDTO> calculateDeadLine(DeadLineQueryRequestDTO request) {
+        long startTime = System.currentTimeMillis();
+        int queryCount = 0;  // 쿼리 수 카운트
 
         List<DeadLineQueryResponseDTO> responses = new ArrayList<>();  // 품목별 응답
 
@@ -113,6 +115,7 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
             LineMaterialInfo info = deadLineMapper
                     .findLineMaterialByMaterialCode(materialCode)
                     .orElse(null);
+            queryCount++;
 
             if (info == null) {
                 responses.add(new DeadLineQueryResponseDTO(
@@ -151,15 +154,16 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
 
                 int plannedQty =
                         ppValidateMapper.sumDailyPlannedQty(lineId, d.toString());
+                queryCount++;
 
                 int available = Math.max(0, dailyCapacity - plannedQty);
                 int used = Math.min(available, remainingQty);
                 remainingQty -= used;
 
-                log.info(
-                        "[DEADLINE] material={}, line={}, date={}, daily={}, planned={}, available={}, remaining={}",
-                        materialCode, lineId, d, dailyCapacity, plannedQty, available, remainingQty
-                );
+//                log.info(
+//                        "[DEADLINE] material={}, line={}, date={}, daily={}, planned={}, available={}, remaining={}",
+//                        materialCode, lineId, d, dailyCapacity, plannedQty, available, remainingQty
+//                );
 
                 if (remainingQty <= 0) {
                     finishDate = d;
@@ -179,6 +183,7 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
 
                     int plannedQty =
                             ppValidateMapper.sumDailyPlannedQty(lineId, d.toString());
+                    queryCount++;
 
                     int available = Math.max(0, dailyCapacity - plannedQty);
                     int used = Math.min(available, remainingQty);
@@ -223,6 +228,10 @@ public class DeadLineQueryServiceImpl implements DeadLineQueryService {
                     errorMessage
             ));
         }
+
+        long elapsedTime = System.currentTimeMillis() - startTime;
+        log.info("[DEADLINE 성능] 품목 수: {}, 총 쿼리 수: {}, 실행 시간: {}ms",
+                request.getItems().size(), queryCount, elapsedTime);
 
         return responses;
     }

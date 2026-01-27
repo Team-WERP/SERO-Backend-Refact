@@ -17,6 +17,7 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.util.*;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class PPQueryServiceImpl implements PPQueryService{
@@ -83,12 +84,16 @@ public class PPQueryServiceImpl implements PPQueryService{
 
     @Override
     public List<DailyLineSummaryResponseDTO> getDailyLineSummary(String month, Integer factoryId) {
+        long startTime = System.currentTimeMillis();
+        int queryCount = 0;
+
         YearMonth ym = YearMonth.parse(month);
         LocalDate start = ym.atDay(1);
         LocalDate end = ym.atEndOfMonth();
 
         // 가동 가능한 라인 조회 (dailyCapacity 포함)
         List<ProductionLineResponseDTO> lines = ppQueryMapper.selectProductionLines(factoryId);
+        queryCount++;
         List<DailyLineSummaryResponseDTO> result = new ArrayList<>();
 
         // 라인별, 날짜별 계획 수량 집계
@@ -101,6 +106,7 @@ public class PPQueryServiceImpl implements PPQueryService{
                         line.getLineId(),
                         date.toString() // yyyy-MM-dd
                 );
+                queryCount++;
                 dailyMap.put(date.getDayOfMonth(), plannedQty);
                 date = date.plusDays(1);
             }
@@ -114,6 +120,10 @@ public class PPQueryServiceImpl implements PPQueryService{
                     )
             );
         }
+
+        long elapsedTime = System.currentTimeMillis() - startTime;
+        log.info("[DAILY-LINE-SUMMARY 성능] 라인 수: {}, 총 쿼리 수: {}, 실행 시간: {}ms",
+                lines.size(), queryCount, elapsedTime);
 
         return result;
     }
