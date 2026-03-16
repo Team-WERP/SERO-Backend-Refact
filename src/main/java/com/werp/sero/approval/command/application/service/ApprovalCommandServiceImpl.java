@@ -53,7 +53,7 @@ public class ApprovalCommandServiceImpl implements ApprovalCommandService {
 
     @Transactional
     @Override
-    public ApprovalResponseDTO submitForApproval(final Employee employee, final ApprovalCreateRequestDTO requestDTO,
+    public ApprovalResponseDTO submitForApproval(Employee employee, final ApprovalCreateRequestDTO requestDTO,
                                                  final List<MultipartFile> files) {
         validateDuplicateApproval(requestDTO.getRefCode());
 

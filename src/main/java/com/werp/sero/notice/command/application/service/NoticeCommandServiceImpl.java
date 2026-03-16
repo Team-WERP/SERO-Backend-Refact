@@ -41,7 +41,7 @@ public class NoticeCommandServiceImpl implements NoticeCommandService {
 
     @Transactional
     @Override
-    public NoticeResponseDTO registerNotice(final Employee employee, final NoticeCreateRequestDTO requestDTO,
+    public NoticeResponseDTO registerNotice(Employee employee, final NoticeCreateRequestDTO requestDTO,
                                             final List<MultipartFile> files) {
         validateCategory(requestDTO.getCategory());
 

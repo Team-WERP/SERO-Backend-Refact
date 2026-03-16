@@ -37,6 +37,10 @@ public class EmployeeSecurityConfig {
             "/auth/login",
             "/actuator/health",
             "/",
+            "/actuator/health", // ★ AWS 로드밸런서 헬스체크용 (필수 추가)
+            "/actuator/**",     // (선택) 다른 액추에이터 정보도 허용하려면 추가
+            "/health"           // (혹시 몰라 기본 경로도 추가)            
+
     };
 
     private static final String[] AUTHORITY_LIST = {
@@ -88,6 +92,7 @@ public class EmployeeSecurityConfig {
                 )
         ;
 
+        
         return http.build();
     }
 }
