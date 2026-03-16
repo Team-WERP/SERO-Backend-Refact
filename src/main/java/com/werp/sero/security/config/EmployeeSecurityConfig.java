@@ -35,7 +35,8 @@ public class EmployeeSecurityConfig {
             "/swagger-ui/**",
             "/swagger-resources/**",
             "/auth/login",
-
+            "/actuator/health",
+            "/",
     };
 
     private static final String[] AUTHORITY_LIST = {
