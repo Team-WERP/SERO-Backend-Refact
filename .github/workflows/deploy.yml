@@ -1,181 +1,54 @@
-name: Deploy to Elastic Beanstalk
+name: Deploy to ECS
 
-# GitHub 저장소 읽기 권한 설정
-permissions:
-  contents: read
-
-# main 브랜치에 push 시 워크플로우 실행
 on:
   push:
     branches:
       - main
 
-# 워크플로우 실행 작업 정의
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
+
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
+      - name: Setup Java
+        uses: actions/setup-java@v3
         with:
-          java-version: '17'
-          distribution: 'corretto'
+          distribution: temurin
+          java-version: 17
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x ./gradlew
-        shell: bash
+      - name: Build JAR
+        run: ./gradlew build -x test
 
-      # envsubst 설치!
-      - name: Install envsubst
-        run: sudo apt-get install -y gettext
-
-      # 배포용 application.yml 파일을 환경 변수로 생성
-      - name: Create application.yml.template
-        run: |
-          mkdir -p src/main/resources
-          cat > src/main/resources/application.yml.template <<'EOL'
-          server:
-            port: ${PORT}
-
-          spring:
-            datasource:
-              driver-class-name: org.mariadb.jdbc.Driver
-              url: ${SPRING_DATASOURCE_URL}
-              username: ${SPRING_DATASOURCE_USERNAME}
-              password: ${SPRING_DATASOURCE_PASSWORD}
-            jpa:
-              hibernate:
-                ddl-auto: none
-              show-sql: true
-              database: mysql
-              properties:
-                hibernate:
-                  format_sql: true
-
-            # Redis 설정 (클러스터 + SSL)
-            data:
-              redis:
-                cluster:
-                  max-redirects: 3
-                  nodes: ${REDIS_HOST}:${REDIS_PORT}
-                ssl:
-                  enabled: true
-
-            # AWS S3 설정
-            cloud:
-              aws:
-                s3:
-                  bucket: ${AWS_S3_BUCKET}
-                region:
-                  static: ${AWS_REGION}
-                credentials:
-                  access-key: ${AWS_ACCESS_KEY}
-                  secret-key: ${AWS_SECRET_KEY}
-
-          jwt:
-            secret-key: ${JWT_SECRET}
-            access-token-expiration-time: ${JWT_EXPIRATION}
-            refresh-token-expiration-time: ${JWT_REFRESH_TOKEN_EXPIRATION_TIME}
-
-          # MyBatis 설정
-          mybatis:
-            mapper-locations: classpath:com/werp/sero/**/query/dao/*.xml
-            type-aliases-package: com.werp.sero.**.dto
-            configuration:
-              map-underscore-to-camel-case: true
-              log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
-          EOL
-
-      - name: Set Yaml
-        run: |
-          echo "DEBUG: Checking if RDS_PASSWORD is set..."
-          if [ -z "$SPRING_DATASOURCE_PASSWORD" ]; then
-            echo "ERROR: SPRING_DATASOURCE_PASSWORD is empty!"
-          else
-            echo "SUCCESS: SPRING_DATASOURCE_PASSWORD is set (length: ${#SPRING_DATASOURCE_PASSWORD})"
-          fi
-          envsubst < src/main/resources/application.yml.template > src/main/resources/application.yml
-          echo "Generated application.yml:"
-          cat src/main/resources/application.yml
-        env:
-          PORT: '8080'
-          SPRING_DATASOURCE_URL: jdbc:mariadb://${{ secrets.RDS_HOSTNAME }}:${{ secrets.RDS_PORT }}/${{ secrets.RDS_DB_NAME }}
-          SPRING_DATASOURCE_USERNAME: ${{ secrets.RDS_USERNAME }}
-          SPRING_DATASOURCE_PASSWORD: ${{ secrets.RDS_PASSWORD }}
-          REDIS_HOST: ${{ secrets.REDIS_HOST }}
-          REDIS_PORT: ${{ secrets.REDIS_PORT }}
-          JWT_SECRET: ${{ secrets.JWT_SECRET }}
-          JWT_EXPIRATION: ${{ secrets.JWT_EXPIRATION }}
-          JWT_REFRESH_TOKEN_EXPIRATION_TIME: ${{ secrets.JWT_REFRESH_TOKEN_EXPIRATION_TIME }}
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-          AWS_REGION: ${{ secrets.AWS_REGION }}
-          AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
-          AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
-
-      #################################################
-      # CI: 빌드
-      #################################################
-
-      - name: Build with Gradle
-        run: ./gradlew clean build -x test
-        shell: bash
-
-      - name: Get current time
-        uses: 1466587594/get-current-time@v2
-        id: current-time
-        with:
-          format: YYYY-MM-DDTHH-mm-ss
-          utcOffset: "+09:00"
-
-      - name: Show Current Time
-        run: echo "CurrentTime=${{steps.current-time.outputs.formattedTime}}"
-        shell: bash
-
-      #################################################
-      # CD: Elastic Beanstalk 배포
-      #################################################
-
-      # 1. JAR 파일 이름 확인 및 ZIP 패키지 생성
-      - name: Prepare deployment artifact
-        run: |
-          echo "> JAR 파일 확인"
-          ls -lh build/libs/
-
-          # application.jar가 이미 생성되어 있음 (build.gradle에서 설정)
-          echo "> application.jar 준비 완료"
-          ls -lh build/libs/application.jar
-
-          # ZIP 패키지 생성 (.platform, .ebextensions 포함)
-          echo "> ZIP 패키지 생성"
-          mkdir -p deploy
-          cp build/libs/application.jar deploy/
-          cp -r .platform deploy/
-          cp -r .ebextensions deploy/
-          cd deploy && zip -r ../application.zip . && cd ..
-          echo "> ZIP 패키지 생성 완료"
-          ls -lh application.zip
-
-      # 2. AWS 자격 증명 설정
       - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
+        uses: aws-actions/configure-aws-credentials@v2
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-northeast-2
+          aws-region: ${{ secrets.AWS_REGION }}
 
-      # 3. Elastic Beanstalk에 배포 (ZIP 패키지 업로드)
-      - name: Deploy to Elastic Beanstalk
-        uses: einaregilsson/beanstalk-deploy@v22
-        with:
-          aws_access_key: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws_secret_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          application_name: sero-b
-          environment_name: Sero-b-env-2
-          version_label: sero-${{steps.current-time.outputs.formattedTime}}
-          region: ap-northeast-2
-          deployment_package: application.zip
-          wait_for_deployment: true
-          wait_for_environment_recovery: 120
+      - name: Login to ECR
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Build Docker Image
+        run: docker build -t sero-backend .
+
+      - name: Tag Docker Image
+        run: |
+          docker tag sero-backend:latest \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/sero-backend:latest
+
+      - name: Push Docker Image
+        run: |
+          docker push \
+          ${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/sero-backend:latest
+
+      - name: Deploy to ECS
+        run: |
+          aws ecs update-service \
+          --cluster sero-cluster-new \
+          --service sero-task-n-service-ksz4njy2 \
+          --force-new-deployment
