@@ -1,5 +1,6 @@
 package com.werp.sero.employee.command.domain.aggregate;
 
+import com.fasterxml.jackson.annotation.JsonIgnore; // [추가] JSON 변환 시 순환참조 방지
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
@@ -9,6 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @Entity
 public class Employee {
+
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private int id;
@@ -43,7 +45,7 @@ public class Employee {
     @Column(name = "created_at", nullable = false)
     private String createdAt;
 
-    @ManyToOne
+    @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "dept_id")
     private Department department;
 }

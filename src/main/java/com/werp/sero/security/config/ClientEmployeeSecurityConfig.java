@@ -1,4 +1,4 @@
-package com.werp.sero.security.config;
+        package com.werp.sero.security.config;
 
 import com.werp.sero.security.handler.CustomAccessDeniedHandler;
 import com.werp.sero.security.handler.CustomAuthenticationEntryPoint;
@@ -74,6 +74,12 @@ public class ClientEmployeeSecurityConfig {
                 )
         ;
 
+
+        
         return http.build();
     }
+
+
+
+
 }
