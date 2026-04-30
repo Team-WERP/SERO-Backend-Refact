@@ -46,6 +46,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -84,8 +87,8 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
         Warehouse warehouse = warehouseRepository.findById(requestDTO.getWarehouseId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.WAREHOUSE_NOT_FOUND));
 
-        // 4. 납품서 품목 조회
-        List<DeliveryOrderItem> deliveryOrderItems = deliveryOrderItemRepository.findByDeliveryOrderId(deliveryOrder.getId());
+        // 4. 납품서 품목 조회 (Fetch Join으로 SalesOrderItem, SalesOrder 함께 로딩)
+        List<DeliveryOrderItem> deliveryOrderItems = deliveryOrderItemRepository.findByDeliveryOrderIdWithSalesOrderItem(deliveryOrder.getId());
 
         // 5. 주문 조회 (첫 번째 품목의 SalesOrderItem에서 SalesOrder 가져오기)
         if (deliveryOrderItems.isEmpty()) {
@@ -122,19 +125,39 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
         List<GoodsIssueItem> goodsIssueItems = new ArrayList<>();
         List<WarehouseStock> stocksToUpdate = new ArrayList<>();
 
+        // 9-1. 품목 코드 목록 추출 후 자재 일괄 조회 (N+1 최적화)
+        List<String> itemCodes = deliveryOrderItems.stream()
+                .map(doItem -> doItem.getSalesOrderItem().getItemCode())
+                .collect(Collectors.toList());
+
+        List<Material> materials = materialRepository.findByMaterialCodeIn(itemCodes);
+        Map<String, Material> materialMap = materials.stream()
+                .collect(Collectors.toMap(Material::getMaterialCode, Function.identity()));
+
+        // 9-2. 자재 ID 목록으로 재고 일괄 조회 (N+1 최적화)
+        List<Integer> materialIds = materials.stream()
+                .map(Material::getId)
+                .collect(Collectors.toList());
+
+        List<WarehouseStock> stocks = warehouseStockRepository
+                .findByWarehouseIdAndMaterialIdIn(warehouse.getId(), materialIds);
+        Map<Integer, WarehouseStock> stockMap = stocks.stream()
+                .collect(Collectors.toMap(stock -> stock.getMaterial().getId(), Function.identity()));
+
+        // 9-3. 품목별 재고 검증 및 할당
         for (DeliveryOrderItem doItem : deliveryOrderItems) {
             String itemCode = doItem.getSalesOrderItem().getItemCode();
             String itemName = doItem.getSalesOrderItem().getItemName();
             int requiredQuantity = doItem.getDoQuantity();
 
-            // 자재 조회
-            Material material = materialRepository.findByMaterialCode(itemCode)
-                    .orElseThrow(() -> new BusinessException(ErrorCode.MATERIAL_NOT_FOUND));
+            // 자재 조회 (Map에서 O(1))
+            Material material = materialMap.get(itemCode);
+            if (material == null) {
+                throw new BusinessException(ErrorCode.MATERIAL_NOT_FOUND);
+            }
 
-            // 창고 재고 조회
-            WarehouseStock stock = warehouseStockRepository
-                    .findByWarehouseIdAndMaterialId(warehouse.getId(), material.getId())
-                    .orElse(null);
+            // 창고 재고 조회 (Map에서 O(1))
+            WarehouseStock stock = stockMap.get(material.getId());
 
             // 재고 검증
             if (stock == null || stock.getAvailableStock() < requiredQuantity) {
@@ -203,10 +226,30 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
             throw new BusinessException(ErrorCode.INVALID_GOODS_ISSUE_STATUS);
         }
 
-        // 2. 출고지시 품목 조회
-        List<GoodsIssueItem> goodsIssueItems = goodsIssueItemRepository.findByGoodsIssueId(goodsIssue.getId());
+        // 2. 출고지시 품목 조회 (Fetch Join으로 SalesOrderItem 함께 로딩)
+        List<GoodsIssueItem> goodsIssueItems = goodsIssueItemRepository.findByGoodsIssueIdWithSalesOrderItem(goodsIssue.getId());
 
-        // 3. 실제 재고 차감 및 이력 기록
+        // 3. 자재 및 재고 일괄 조회 (N+1 최적화)
+        // 3-1. 품목 코드 목록 추출 후 자재 일괄 조회
+        List<String> itemCodes = goodsIssueItems.stream()
+                .map(giItem -> giItem.getSalesOrderItem().getItemCode())
+                .collect(Collectors.toList());
+
+        List<Material> materials = materialRepository.findByMaterialCodeIn(itemCodes);
+        Map<String, Material> materialMap = materials.stream()
+                .collect(Collectors.toMap(Material::getMaterialCode, Function.identity()));
+
+        // 3-2. 자재 ID 목록으로 재고 일괄 조회
+        List<Integer> materialIds = materials.stream()
+                .map(Material::getId)
+                .collect(Collectors.toList());
+
+        List<WarehouseStock> stocks = warehouseStockRepository
+                .findByWarehouseIdAndMaterialIdIn(goodsIssue.getWarehouse().getId(), materialIds);
+        Map<Integer, WarehouseStock> stockMap = stocks.stream()
+                .collect(Collectors.toMap(stock -> stock.getMaterial().getId(), Function.identity()));
+
+        // 4. 실제 재고 차감 및 이력 기록
         String createdAt = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"));
         List<WarehouseStock> stocksToUpdate = new ArrayList<>();
         List<WarehouseStockHistory> historiesToSave = new ArrayList<>();
@@ -220,14 +263,17 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
             String unit = giItem.getSalesOrderItem().getUnit();
             int quantity = giItem.getQuantity();
 
-            // 자재 조회
-            Material material = materialRepository.findByMaterialCode(itemCode)
-                    .orElseThrow(() -> new BusinessException(ErrorCode.MATERIAL_NOT_FOUND));
+            // 자재 조회 (Map에서 O(1))
+            Material material = materialMap.get(itemCode);
+            if (material == null) {
+                throw new BusinessException(ErrorCode.MATERIAL_NOT_FOUND);
+            }
 
-            // 창고 재고 조회
-            WarehouseStock stock = warehouseStockRepository
-                    .findByWarehouseIdAndMaterialId(goodsIssue.getWarehouse().getId(), material.getId())
-                    .orElseThrow(() -> new BusinessException(ErrorCode.WAREHOUSE_STOCK_NOT_FOUND));
+            // 창고 재고 조회 (Map에서 O(1))
+            WarehouseStock stock = stockMap.get(material.getId());
+            if (stock == null) {
+                throw new BusinessException(ErrorCode.WAREHOUSE_STOCK_NOT_FOUND);
+            }
 
             // 실제 재고 차감 (current_stock 감소)
             stock.deductStock(quantity);
@@ -266,26 +312,26 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
             responseItems.add(itemDTO);
         }
 
-        // 4. 배치 저장
+        // 5. 배치 저장
         warehouseStockRepository.saveAll(stocksToUpdate);
         warehouseStockHistoryRepository.saveAll(historiesToSave);
         salesOrderItemHistoryRepository.saveAll(salesHistoriesToSave);
 
-        // 5. 출고지시 상태를 출고완료(GI_ISSUED)로 변경
+        // 6. 출고지시 상태를 출고완료(GI_ISSUED)로 변경
         goodsIssue.updateApprovalInfo(goodsIssue.getApprovalCode(), "GI_ISSUED");
         goodsIssueRepository.save(goodsIssue);
 
-        // 6. 배송 정보 생성
-        // 6-1. 운송장 번호 생성 (SERO-20251222-D001 형식)
+        // 7. 배송 정보 생성
+        // 7-1. 운송장 번호 생성 (SERO-20251222-D001 형식)
         String today = LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyyMMdd"));
         int dailyCount = deliveryRepository.countByDate(today);
         String trackingNumber = String.format("SERO-%s-D%03d", today, dailyCount + 1);
 
-        // 6-2. 배송기사 조회 (ID=23, 김기사)
+        // 7-2. 배송기사 조회 (ID=23, 김기사)
         Employee driver = employeeRepository.findById(23)
                 .orElseThrow(() -> new BusinessException(ErrorCode.EMPLOYEE_NOT_FOUND));
 
-        // 6-3. 배송 데이터 생성
+        // 7-3. 배송 데이터 생성
         Delivery delivery = Delivery.builder()
                 .trackingNumber(trackingNumber)
                 .driverName(driver.getName())
@@ -299,14 +345,14 @@ public class GoodsIssueCommandServiceImpl implements GoodsIssueCommandService {
 
         deliveryRepository.save(delivery);
 
-        // 7. 주문 상태를 배송중(ORD_SHIPPING)으로 변경
+        // 8. 주문 상태를 배송중(ORD_SHIPPING)으로 변경
         SalesOrder salesOrder = goodsIssue.getSalesOrder();
         if ("ORD_SHIP_READY".equals(salesOrder.getStatus())) {
             salesOrder.updateApprovalInfo(salesOrder.getApprovalCode(), "ORD_SHIPPING");
             soRepository.save(salesOrder);
         }
 
-        // 8. 응답 DTO 생성 및 반환
+        // 9. 응답 DTO 생성 및 반환
         return GICompleteResponseDTO.builder()
                 .giCode(giCode)
                 .warehouseName(goodsIssue.getWarehouse().getName())
