@@ -11,6 +11,7 @@
         <result property="productionLineName" column="production_line_name"/>
         <result property="productionLineStatus" column="production_line_status"/>
         <result property="dailyCapacity" column="daily_capacity"/>
+        <result property="materialCode" column="material_code"/>
     </resultMap>
 
 <!-- 자재 코드로 LineMaterial 정보 조회 -->
@@ -27,5 +28,32 @@
          LIMIT 1
     </select>
 
+<!-- 자재 코드 목록으로 일괄 조회 (materialCode별 LIMIT 1을 ROW_NUMBER로 보장) -->
+    <select id="findLineMaterialsByMaterialCodes" resultMap="lineMaterialInfoResultMap">
+        SELECT
+               D.line_material_id
+             , D.production_line_id
+             , D.production_line_name
+             , D.production_line_status
+             , D.daily_capacity
+             , D.material_code
+          FROM (
+              SELECT A.id           AS line_material_id
+                   , B.id           AS production_line_id
+                   , B.line_name    AS production_line_name
+                   , B.status       AS production_line_status
+                   , B.daily_capacity AS daily_capacity
+                   , C.material_code AS material_code
+                   , ROW_NUMBER() OVER (PARTITION BY C.material_code ORDER BY A.id) AS rn
+                FROM line_material A
+               INNER JOIN production_line B ON A.line_id = B.id
+               INNER JOIN material C ON A.material_id = C.id
+               WHERE C.material_code IN
+              <foreach item="code" collection="materialCodes" open="(" separator="," close=")">
+                  #{code}
+              </foreach>
+          ) D
+         WHERE D.rn = 1
+    </select>
 
 </mapper>
